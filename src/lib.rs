@@ -12,7 +12,7 @@
 //! Field meanings:
 //! - `actor`   — operator email (or `"-"` for system).
 //! - `action`  — namespaced verb (`alert.ack`, `triage.comment`,
-//!               `link.create`).
+//!   `link.create`).
 //! - `target`  — resource id (`fp-abc123`, `link:42`).
 //! - `result`  — outcome (`ok`, `denied`, `not-found`, …).
 //! - `detail`  — arbitrary JSON for context (input snippet, prior state, …).
