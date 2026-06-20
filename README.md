@@ -44,3 +44,11 @@ let _ref = emit_audit(
 
 - [`audit-go`](https://github.com/etamong-playground/audit-go) — Go canonical impl
 - [`httperr-rs`](https://github.com/etamong-playground/httperr-rs) — Rust error companion
+
+## Acknowledgements
+
+Uses [`serde_json`](https://crates.io/crates/serde_json) (MIT OR Apache-2.0).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
