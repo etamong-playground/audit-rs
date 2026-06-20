@@ -1,5 +1,7 @@
 # etamong-audit (Rust)
 
+> Canonical: https://github.com/etamong-playground/audit-rs | Consumed as git dependency in Cargo.toml
+
 Rust port of the etamong-lab cross-service audit contract (planning#193).
 Sibling of [`shared/libs/audit-go`](https://gitlab.com/etamong-lab/shared/libs/audit-go).
 

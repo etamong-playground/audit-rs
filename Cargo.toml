@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "etamong-lab cross-service audit contract (planning#193) — Rust port matching shared/libs/audit-go"
 license = "MIT OR Apache-2.0"
-repository = "https://gitlab.com/etamong-lab/shared/libs/audit-rs"
+repository = "https://github.com/etamong-playground/audit-rs"
 
 [dependencies]
 serde_json = "1"
