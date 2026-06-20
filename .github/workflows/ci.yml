@@ -1,17 +1,18 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
-  ci:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-features
-      - run: cargo clippy -- -D warnings
-      - run: cargo test --all-features
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
