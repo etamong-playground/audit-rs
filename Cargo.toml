@@ -2,7 +2,7 @@
 name = "etamong-audit"
 version = "0.1.0"
 edition = "2021"
-description = "Structured audit logging for Rust — language-portable wire format matching the Go contract."
+description = "Structured audit logging for Rust — one JSON line per event (actor, action, target, result) with a fresh ref token."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/etamong-playground/audit-rs"
 

@@ -1,13 +1,11 @@
-//! etamong-lab cross-service audit contract (planning#193), Rust port.
+//! Structured audit logging: one stderr line per audit event
+//! `{"level":"info","msg":"audit","app","ref","actor","action","target",
+//! "result","detail"}`. `msg:"audit"` is the distinguishing tag log tooling
+//! groups on (vs `msg:"request failed"` of the sibling
+//! [`etamong-httpx`](https://github.com/etamong-playground/httpx-rs) crate).
 //!
-//! One stderr line per audit event: `{"level":"info","msg":"audit","app",
-//! "ref","actor","action","target","result","detail"}`. `msg:"audit"` is the
-//! distinguishing tag the "etamong-lab Audit" Grafana dashboard groups on
-//! (vs `msg:"request failed"` of [`etamong-httperr`](
-//! https://gitlab.com/etamong-lab/shared/libs/httperr-rs)).
-//!
-//! `ref` is a fresh 8-hex token per event — joining to a per-request id
-//! (planning#201) is a separate follow-up.
+//! `ref` is a fresh 8-hex token per event; correlating it to a per-request id
+//! is a separate follow-up.
 //!
 //! Field meanings:
 //! - `actor`   — operator email (or `"-"` for system).
