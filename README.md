@@ -98,3 +98,41 @@ Changing the dedicated identity key changes correlation; retain its version alon
 
 The cross-language fixtures in `tests/fixtures/go-durable.json` were generated with `audit-go` commit `cb5129e3830a` using `durable.ActorID`, `Event.Validate` and `Event.ExpiresAt`.
 They cover identity escaping, leap-day expiry, offset normalization and fractional seconds.
+
+## PostgreSQL recording
+
+Enable the optional `postgres` feature for the sqlx 0.8 adapter; logging-only consumers do not require a database dependency.
+Apply `durable::postgres::SCHEMA` through the application's migration driver before serving traffic.
+The schema separates immutable canonical events from mutable delivery state and inserts the delivery row through a trigger in the same transaction.
+Retained events reject updates, deletion and truncation; expired events permit deletion so bounded cleanup can remove them.
+Use a restricted application database role because owners can disable database guards.
+
+```rust,ignore
+use etamong_audit::durable::postgres::record;
+
+let mut tx = pool.begin().await?;
+let outcome = async {
+    sqlx::query("DELETE FROM records WHERE id = $1")
+        .bind(record_id)
+        .execute(&mut *tx)
+        .await?;
+    record(&mut tx, &event).await?;
+    Ok::<(), Box<dyn std::error::Error>>(())
+}.await;
+match outcome {
+    Ok(()) => tx.commit().await?,
+    Err(error) => {
+        tx.rollback().await?;
+        return Err(error);
+    }
+}
+```
+
+`record` never commits or starts an independent transaction.
+Any error, including validation errors before SQL execution, requires rolling back the business transaction.
+Repeated local event IDs fail instead of silently attaching unrelated mutations to earlier history.
+New records reject occurrences more than five minutes in the future or already expired; insertion preserves original occurrence and expiry.
+Commit errors must not be reported as confirmed success; an uncertain commit requires application reconciliation using the stable event ID.
+
+Run database tests against a disposable PostgreSQL database with `AUDIT_TEST_DATABASE_URL` and `cargo test --all-features`.
+The tests create isolated schemas and fail when the database URL is missing, rather than silently skipping database coverage.

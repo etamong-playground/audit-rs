@@ -1,3 +1,6 @@
+#[cfg(feature = "postgres")]
+pub mod postgres;
+
 use chrono::{DateTime, Datelike, FixedOffset, SecondsFormat, Timelike, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
