@@ -136,3 +136,25 @@ Commit errors must not be reported as confirmed success; an uncertain commit req
 
 Run database tests against a disposable PostgreSQL database with `AUDIT_TEST_DATABASE_URL` and `cargo test --all-features`.
 The tests create isolated schemas and fail when the database URL is missing, rather than silently skipping database coverage.
+
+### Retrying delivery
+
+`postgres::export_one(&pool, sender)` locks one eligible delivery row with `SKIP LOCKED` and returns `false` when none is ready.
+The sender receives the original typed event and must authenticate the collector, validate its matching acknowledgement and return `Disposition::Accepted` only after central durable commit.
+An `Expired` response is accepted only after the event's original expiry has passed.
+
+```rust,ignore
+use etamong_audit::durable::postgres::{export_one, Disposition};
+
+let processed = export_one(&pool, |event| async move {
+    // The application transport validates credentials and the matching event ID.
+    collector.send(event).await
+}).await?;
+```
+
+Failed sends persist exponential retry delays from one to 512 seconds, without changing the retained event or its expiry.
+The sender future is cancelled after ten seconds and the whole pass after fifteen seconds, reserving five seconds from that deadline for acknowledgement or retry persistence; network clients must use cancellation-safe asynchronous I/O.
+Cancellation or a lost commit acknowledgement can leave an uncertain central result, so the collector must deduplicate authenticated producer identity plus event ID.
+Acknowledged and expired rows are excluded from subsequent delivery selection.
+Stored payloads are decoded and canonically reserialized to verify their hash and indexed identity/timestamps before dispatch; invalid retained data receives bounded retry backoff and returns an error for operational reconciliation rather than being discarded.
+Indexed timestamps allow one microsecond of database encoding precision loss; the canonical event retains the original timestamp.
