@@ -15,6 +15,8 @@
 //! - `result`  — outcome (`ok`, `denied`, `not-found`, …).
 //! - `detail`  — arbitrary JSON for context (input snippet, prior state, …).
 
+pub mod durable;
+
 use std::hash::{BuildHasher, Hasher};
 
 /// Emits one audit line to stderr. Returns the generated `ref` so callers can

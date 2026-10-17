@@ -52,3 +52,49 @@ Uses [`serde_json`](https://crates.io/crates/serde_json) (MIT OR Apache-2.0).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Durable events
+
+`durable::Event` is a separate validated contract for retained action history.
+Operational `emit_audit` logging does not provide transactional persistence.
+Producers allowlist changes and omit credentials, raw bodies and document contents.
+
+```rust
+use etamong_audit::durable::{actor_id, Actor, Event, new_id};
+
+let key = [7_u8; 32]; // Supply a dedicated secret key in the application.
+let event = Event {
+    schema_version: 1,
+    event_id: new_id(),
+    operation_id: new_id(),
+    service: "example".into(),
+    environment: "test".into(),
+    occurred_at: chrono::Utc::now().fixed_offset(),
+    actor: Actor {
+        id: actor_id(&key, "https://identity.example", "verified-subject")?,
+        kind: "user".into(),
+        key_id: "v1".into(),
+    },
+    initiator: None,
+    action: "record.delete".into(),
+    target_type: "record".into(),
+    target_id: "42".into(),
+    result: "ok".into(),
+    r#ref: String::new(),
+    reason_code: String::new(),
+    changes: Vec::new(),
+};
+let payload = event.to_json()?;
+let expires_at = event.expires_at()?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`to_json` validates required fields, actor/result values, byte limits and the 64 KiB encoded payload limit.
+It preserves Go-compatible JSON escaping, including the identity input's HTML and Unicode line-separator escapes.
+Deserialization rejects unknown fields; callers must validate deserialized events before using them.
+Expiry is two calendar years after UTC occurrence, clamping February 29 to February 28.
+Occurrence years are limited to 1 through 9997 and leap seconds are rejected so both occurrence and expiry fit the shared wire representation.
+Changing the dedicated identity key changes correlation; retain its version alongside the pseudonym.
+
+The cross-language fixtures in `tests/fixtures/go-durable.json` were generated with `audit-go` commit `cb5129e3830a` using `durable.ActorID`, `Event.Validate` and `Event.ExpiresAt`.
+They cover identity escaping, leap-day expiry, offset normalization and fractional seconds.
