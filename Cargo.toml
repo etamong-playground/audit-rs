@@ -16,9 +16,11 @@ hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", optional = true, default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
 
+tokio = { version = "1", optional = true, features = ["time"] }
+
 [features]
 default = []
-postgres = ["dep:sqlx"]
+postgres = ["dep:sqlx", "dep:tokio"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
