@@ -602,3 +602,46 @@ async fn cleanup_rejects_invalid_limits_without_deleting() {
     assert_eq!(counts(&pool).await, (0, 1, 1));
     cleanup(admin, pool, schema).await;
 }
+
+#[tokio::test]
+async fn enqueue_uses_event_schema_after_install_and_upgrade() {
+    for upgrade in [false, true] {
+        let (admin, pool, schema) = database().await;
+        if upgrade {
+            sqlx::raw_sql("CREATE OR REPLACE FUNCTION audit_enqueue_event() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO audit_delivery (service,event_id) VALUES (NEW.service,NEW.event_id); RETURN NEW; END; $$;")
+                .execute(&pool).await.unwrap();
+        }
+        let retained = event();
+        let mut tx = pool.begin().await.unwrap();
+        record(&mut tx, &retained).await.unwrap();
+        tx.commit().await.unwrap();
+        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(
+            "CREATE TEMP TABLE audit_delivery (LIKE audit_delivery INCLUDING ALL) ON COMMIT DROP",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO business VALUES (1)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let added = event();
+        record(&mut tx, &added).await.unwrap();
+        let shadow: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_temp.audit_delivery")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(shadow, 0, "temporary table received durable delivery");
+        tx.commit().await.unwrap();
+        assert_eq!(counts(&pool).await, (1, 2, 2));
+        for expected in [retained, added] {
+            let payload: String = sqlx::query_scalar("SELECT e.payload::text FROM audit_events e JOIN audit_delivery d USING(service,event_id) WHERE e.event_id=$1 AND e.service=$2")
+                .bind(&expected.event_id).bind(&expected.service).fetch_one(&pool).await.unwrap();
+            assert_eq!(serde_json::from_str::<Event>(&payload).unwrap(), expected);
+        }
+        cleanup(admin, pool, schema).await;
+    }
+}

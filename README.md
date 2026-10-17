@@ -103,6 +103,9 @@ They cover identity escaping, leap-day expiry, offset normalization and fraction
 
 Enable the optional `postgres` feature for the sqlx 0.8 adapter; logging-only consumers do not require a database dependency.
 Apply `durable::postgres::SCHEMA` through the application's migration driver before serving traffic.
+The enqueue trigger writes to `audit_delivery` in the event table's schema, even when a temporary table shadows that name.
+For existing installations, apply the updated `audit_enqueue_event` function in a new forward migration; preserve already-applied migration checksums.
+Updating the dependency alone does not replace a function installed from copied SQL.
 The schema separates immutable canonical events from mutable delivery state and inserts the delivery row through a trigger in the same transaction.
 Retained events reject updates, deletion and truncation; expired events permit deletion so bounded cleanup can remove them.
 Use a restricted application database role because owners can disable database guards.
