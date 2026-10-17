@@ -201,3 +201,71 @@ async fn schedule_retry(
         .bind(service).bind(id).bind(delay).execute(&mut **tx).await.map_err(ExportError::Database)?;
     Ok(())
 }
+
+/// Inclusive UTC ranges of deleted records; empty batches have no ranges or payloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CleanupSummary {
+    pub removed: i64,
+    pub occurred_from: Option<chrono::DateTime<Utc>>,
+    pub occurred_to: Option<chrono::DateTime<Utc>>,
+    pub expired_from: Option<chrono::DateTime<Utc>>,
+    pub expired_to: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Debug)]
+pub enum CleanupError {
+    InvalidLimit,
+    Database(sqlx::Error),
+}
+impl fmt::Display for CleanupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidLimit => "audit cleanup limit must be in 1..10000",
+            Self::Database(_) => "audit cleanup failed",
+        })
+    }
+}
+impl Error for CleanupError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Database(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+type CleanupRow = (
+    i64,
+    Option<chrono::DateTime<Utc>>,
+    Option<chrono::DateTime<Utc>>,
+    Option<chrono::DateTime<Utc>>,
+    Option<chrono::DateTime<Utc>>,
+);
+
+/// Deletes at most `limit` expired events, cascading their delivery rows without committing.
+/// Record the cleanup summary on this same transaction and roll back on any error.
+/// The caller owns the transaction deadline; a zero count during concurrent cleanup
+/// does not certify that no expired records remain.
+pub async fn purge_expired(
+    tx: &mut Transaction<'_, Postgres>,
+    limit: u32,
+) -> Result<CleanupSummary, CleanupError> {
+    if !(1..=10000).contains(&limit) {
+        return Err(CleanupError::InvalidLimit);
+    }
+    let (removed,occurred_from,occurred_to,expired_from,expired_to): CleanupRow = sqlx::query_as(
+        "WITH removed AS (
+           DELETE FROM audit_events WHERE (service,event_id) IN (
+             SELECT service,event_id FROM audit_events WHERE expires_at <= CURRENT_TIMESTAMP
+             ORDER BY expires_at,service,event_id LIMIT $1
+           ) RETURNING occurred_at,expires_at
+         ) SELECT count(*),min(occurred_at),max(occurred_at),min(expires_at),max(expires_at) FROM removed")
+        .bind(i64::from(limit)).fetch_one(&mut **tx).await.map_err(CleanupError::Database)?;
+    Ok(CleanupSummary {
+        removed,
+        occurred_from,
+        occurred_to,
+        expired_from,
+        expired_to,
+    })
+}
