@@ -158,3 +158,35 @@ Cancellation or a lost commit acknowledgement can leave an uncertain central res
 Acknowledged and expired rows are excluded from subsequent delivery selection.
 Stored payloads are decoded and canonically reserialized to verify their hash and indexed identity/timestamps before dispatch; invalid retained data receives bounded retry backoff and returns an error for operational reconciliation rather than being discarded.
 Indexed timestamps allow one microsecond of database encoding precision loss; the canonical event retains the original timestamp.
+
+### Expiry cleanup
+
+`postgres::purge_expired(&mut tx, limit)` removes at most 1–10,000 expired events using their original expiry and cascades their delivery rows.
+It returns only the deleted count and inclusive UTC occurrence/expiry ranges, never identities or payloads.
+Unexpired events remain, whether or not central delivery has acknowledged them.
+
+```rust,ignore
+use etamong_audit::durable::{Change, postgres::{purge_expired, record}};
+
+let mut tx = pool.begin().await?;
+let summary = purge_expired(&mut tx, 1000).await?;
+if summary.removed == 0 {
+    tx.rollback().await?;
+} else {
+    summary_event.changes = [
+        ("removed_count", summary.removed.to_string()),
+        ("occurred_from", summary.occurred_from.unwrap().to_rfc3339()),
+        ("occurred_to", summary.occurred_to.unwrap().to_rfc3339()),
+        ("expired_from", summary.expired_from.unwrap().to_rfc3339()),
+        ("expired_to", summary.expired_to.unwrap().to_rfc3339()),
+    ].into_iter().map(|(field, after)| Change {
+        field: field.into(), before: String::new(), after,
+    }).collect();
+    record(&mut tx, &summary_event).await?;
+    tx.commit().await?;
+}
+```
+
+The caller supplies the semantic cleanup event and owns the transaction deadline; every error must roll back that transaction, including failure to persist its summary.
+Empty batches require no audit event, and a zero count under concurrent cleanup is not proof that the backlog is empty.
+A commit error is not a confirmed deletion count; reconcile uncertain commits using the cleanup event's stable ID.

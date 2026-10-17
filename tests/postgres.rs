@@ -471,3 +471,134 @@ async fn acquisition_stops_before_persistence_reserve() {
     );
     cleanup(admin, pool, schema).await;
 }
+
+async fn retained_fixture(pool: &PgPool, e: &Event) {
+    let payload = String::from_utf8(e.to_json().unwrap()).unwrap();
+    let hash = hex::encode(Sha256::digest(payload.as_bytes()));
+    sqlx::query("INSERT INTO audit_events(service,event_id,payload,content_hash,occurred_at,expires_at) VALUES($1,$2,$3::jsonb,$4,$5,$6)")
+        .bind(&e.service).bind(&e.event_id).bind(payload).bind(hash).bind(e.occurred_at).bind(e.expires_at().unwrap()).execute(pool).await.unwrap();
+}
+
+#[tokio::test]
+async fn cleanup_is_bounded_and_rolls_back_with_its_summary() {
+    use etamong_audit::durable::postgres::purge_expired;
+    let (admin, pool, schema) = database().await;
+    let mut first = event();
+    first.occurred_at = "2020-02-29T12:00:00Z".parse().unwrap();
+    retained_fixture(&pool, &first).await;
+    let mut second = event();
+    second.occurred_at = "2021-06-15T12:00:00Z".parse().unwrap();
+    retained_fixture(&pool, &second).await;
+    let mut live = event();
+    live.event_id = first.event_id.clone();
+    live.service = "another-service".into();
+    save(&pool, &live).await;
+    for commit in [false, true] {
+        let mut tx = pool.begin().await.unwrap();
+        let removed = purge_expired(&mut tx, 1).await.unwrap();
+        assert_eq!(removed.removed, 1);
+        assert_eq!(
+            removed.occurred_from,
+            Some(first.occurred_at.with_timezone(&Utc))
+        );
+        assert_eq!(removed.occurred_to, removed.occurred_from);
+        assert_eq!(removed.expired_from, Some(first.expires_at().unwrap()));
+        assert_eq!(removed.expired_to, removed.expired_from);
+        let mut summary = event();
+        summary.action = "audit.retention.cleanup".into();
+        summary.changes = vec![etamong_audit::durable::Change {
+            field: "removed_count".into(),
+            before: String::new(),
+            after: removed.removed.to_string(),
+        }];
+        record(&mut tx, &summary).await.unwrap();
+        assert_eq!(
+            counts(&pool).await,
+            (0, 3, 3),
+            "cleanup escaped caller transaction"
+        );
+        if commit {
+            tx.commit().await.unwrap();
+        } else {
+            tx.rollback().await.unwrap();
+        }
+        assert_eq!(counts(&pool).await, (0, 3, 3));
+    }
+    let retained: Vec<String> =
+        sqlx::query_scalar("SELECT event_id FROM audit_events WHERE service=$1")
+            .bind(&live.service)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(retained, vec![live.event_id]);
+    let mut third = event();
+    third.occurred_at = "2022-06-15T12:00:00Z".parse().unwrap();
+    retained_fixture(&pool, &third).await;
+    let mut tx = pool.begin().await.unwrap();
+    let remaining = purge_expired(&mut tx, 100).await.unwrap();
+    assert_eq!(remaining.removed, 2);
+    assert_eq!(
+        remaining.occurred_from,
+        Some(second.occurred_at.with_timezone(&Utc))
+    );
+    assert_eq!(
+        remaining.occurred_to,
+        Some(third.occurred_at.with_timezone(&Utc))
+    );
+    assert_eq!(remaining.expired_from, Some(second.expires_at().unwrap()));
+    assert_eq!(remaining.expired_to, Some(third.expires_at().unwrap()));
+    tx.commit().await.unwrap();
+    assert_eq!(counts(&pool).await, (0, 2, 2));
+    let mut tx = pool.begin().await.unwrap();
+    let empty = purge_expired(&mut tx, 100).await.unwrap();
+    assert_eq!(empty.removed, 0);
+    assert_eq!(
+        (
+            empty.occurred_from,
+            empty.occurred_to,
+            empty.expired_from,
+            empty.expired_to
+        ),
+        (None, None, None, None)
+    );
+    tx.rollback().await.unwrap();
+    cleanup(admin, pool, schema).await;
+}
+
+#[tokio::test]
+async fn cleanup_summary_insert_failure_restores_expired_event() {
+    use etamong_audit::durable::postgres::purge_expired;
+    let (admin, pool, schema) = database().await;
+    let mut expired = event();
+    expired.occurred_at = "2020-01-01T00:00:00Z".parse().unwrap();
+    retained_fixture(&pool, &expired).await;
+    sqlx::query("ALTER TABLE audit_delivery ADD CONSTRAINT reject_summary CHECK(event_id <> 'cleanup-summary')").execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(purge_expired(&mut tx, 10).await.unwrap().removed, 1);
+    let mut summary = event();
+    summary.event_id = "cleanup-summary".into();
+    summary.action = "audit.retention.cleanup".into();
+    assert!(record(&mut tx, &summary).await.is_err());
+    tx.rollback().await.unwrap();
+    assert_eq!(counts(&pool).await, (0, 1, 1));
+    cleanup(admin, pool, schema).await;
+}
+
+#[tokio::test]
+async fn cleanup_rejects_invalid_limits_without_deleting() {
+    use etamong_audit::durable::postgres::{purge_expired, CleanupError};
+    let (admin, pool, schema) = database().await;
+    let mut expired = event();
+    expired.occurred_at = "2020-01-01T00:00:00Z".parse().unwrap();
+    retained_fixture(&pool, &expired).await;
+    let mut tx = pool.begin().await.unwrap();
+    for limit in [0, 10001, u32::MAX] {
+        assert!(matches!(
+            purge_expired(&mut tx, limit).await,
+            Err(CleanupError::InvalidLimit)
+        ));
+    }
+    tx.rollback().await.unwrap();
+    assert_eq!(counts(&pool).await, (0, 1, 1));
+    cleanup(admin, pool, schema).await;
+}
